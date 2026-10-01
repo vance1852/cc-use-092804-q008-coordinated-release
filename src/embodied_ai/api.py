@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 from .errors import ServiceError, ValidationFailed
@@ -23,10 +24,34 @@ class Response:
 
 
 class JsonApplication:
-    """将 HTTP 路由映射到领域服务，便于无网络单元测试。"""
+    """将 HTTP 路由映射到领域服务，便于无网络单元测试。
 
-    def __init__(self, service: TrialService) -> None:
-        self.service = service
+    生产部署传入 ``service_factory``：ThreadingHTTPServer 每个请求在工作线程
+    处理，线程各自持有独立 SQLite 连接，避免多线程共用连接造成事务交错。
+    """
+
+    def __init__(
+        self,
+        service: TrialService | None = None,
+        *,
+        service_factory: Callable[[], TrialService] | None = None,
+    ) -> None:
+        if service is None and service_factory is None:
+            raise ValueError("必须提供 service 或 service_factory")
+        self._service = service
+        self._service_factory = service_factory
+        self._local = threading.local()
+
+    @property
+    def service(self) -> TrialService:
+        if self._service_factory is None:
+            assert self._service is not None
+            return self._service
+        current = getattr(self._local, "service", None)
+        if current is None:
+            current = self._service_factory()
+            self._local.service = current
+        return current
 
     @staticmethod
     def _actor(headers: Mapping[str, str]) -> str:
@@ -173,16 +198,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
-    connection = connect(args.database)
-    application = JsonApplication(TrialService(connection))
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(application))
+    database = args.database
+
+    def service_factory() -> TrialService:
+        return TrialService(connect(database))
+
+    server = ThreadingHTTPServer(
+        (args.host, args.port), make_handler(JsonApplication(service_factory=service_factory))
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
-        connection.close()
     return 0
 
 

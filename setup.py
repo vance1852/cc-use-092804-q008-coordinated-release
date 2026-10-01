@@ -6,7 +6,7 @@ from setuptools import find_packages, setup
 setup(
     name="robot-control-operations",
     version="0.1.0",
-    description="机器人控制平台调度与能源分析、调度与现场机组巡检分析准入服务",
+    description="机器人控制平台调度与能源分析、现场机组巡检分析准入及控制与 AI 协同发布服务",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     package_dir={"": "src"},
